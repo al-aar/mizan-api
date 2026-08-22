@@ -119,19 +119,41 @@ async function scrapeEdinburgh(): Promise<DailyTimes> {
   return result!;
 }
 
+function isToday(cell: string): boolean {
+  const now = new Date();
+  const d = now.getDate(), m = now.getMonth() + 1, y = now.getFullYear();
+  const text = cell.replace(/(\d+)(st|nd|rd|th)/gi, "$1").trim();
+  const MONTHS: Record<string, number> = {
+    january:1,february:2,march:3,april:4,may:5,june:6,
+    july:7,august:8,september:9,october:10,november:11,december:12,
+    jan:1,feb:2,mar:3,apr:4,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12
+  };
+  const t = text.match(/(\d{1,2})\s+([a-z]+)\s+(\d{4})/i);
+  if (t) {
+    const mo = MONTHS[t[2].toLowerCase()];
+    return !!mo && parseInt(t[1]) === d && mo === m && parseInt(t[3]) === y;
+  }
+  const s = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (s) return parseInt(s[1]) === d && parseInt(s[2]) === m && parseInt(s[3]) === y;
+  return false;
+}
+
 async function scrapeBirmingham(): Promise<DailyTimes> {
-  const html = await fetchHtml("https://centralmosque.org.uk/timetable");
-  const $ = cheerio.load(html);
-  const today = new Date().getDate();
-  const monthName = new Date().toLocaleString("en-GB", { month: "long" }).toLowerCase();
+  const res = await fetch("https://centralmosque.org.uk/wp-json/wp/v2/pages/325", {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+    },
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!res.ok) throw new Error(`Birmingham wp-json HTTP ${res.status}`);
+  const json = await res.json() as { content: { rendered: string } };
+  const $ = cheerio.load(json.content.rendered);
   let result: DailyTimes | null = null;
   $("table tr").each((_, row) => {
     const cells = $(row).find("td");
     if (cells.length < 13) return;
     const dateCell = cellText($, cells.get(0)!).toLowerCase();
-    const dayInCell = parseInt(dateCell);
-    if (dayInCell !== today) return;
-    if (!dateCell.includes(monthName)) return;
+    if (!isToday(dateCell)) return;
     result = {
       adhan: { Fajr: pad24(cellText($, cells.get(2)!)), Dhuhr: pad24(cellText($, cells.get(6)!)), Asr: pad24(cellText($, cells.get(8)!)), Maghrib: pad24(cellText($, cells.get(10)!)), Isha: pad24(cellText($, cells.get(12)!)) },
       jamaat: { Fajr: pad24(cellText($, cells.get(3)!)), Dhuhr: pad24(cellText($, cells.get(7)!)), Asr: pad24(cellText($, cells.get(9)!)), Maghrib: pad24(cellText($, cells.get(11)!)), Isha: pad24(cellText($, cells.get(13)!)) },
