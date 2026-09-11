@@ -9,6 +9,47 @@ interface DailyTimes {
   source: string;
 }
 
+// ── In-memory cache ────────────────────────────────────────────────────────
+// Avoids hitting mosque websites on every app request.
+// Entries are considered fresh for 6 hours on the same calendar day.
+// On fetch failure, stale cache is returned so the app never shows a 502
+// just because a mosque website is temporarily slow or blocked.
+interface CacheEntry {
+  data: DailyTimes;
+  dateKey: string;   // "YYYY-MM-DD" — invalidated on a new day
+  fetchedAt: number; // ms timestamp  — re-fetched after 6 h on same day
+}
+const cache = new Map<string, CacheEntry>();
+
+function todayKey(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+async function withCache(id: string, fn: () => Promise<DailyTimes>): Promise<DailyTimes> {
+  const now = Date.now();
+  const today = todayKey();
+  const entry = cache.get(id);
+
+  if (entry && entry.dateKey === today && now - entry.fetchedAt < 6 * 60 * 60 * 1000) {
+    return entry.data; // fresh cache hit
+  }
+
+  try {
+    const data = await fn();
+    cache.set(id, { data, dateKey: today, fetchedAt: now });
+    return data;
+  } catch (err) {
+    if (entry) {
+      console.warn(`[cache] ${id}: fetch failed, serving stale data from ${entry.dateKey}`);
+      return entry.data; // serve yesterday's times rather than 502
+    }
+    throw err;
+  }
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
 function pad24(t: string): string {
   const s = t.trim().replace(/\s+/g, "");
   if (!s || s === "-") return "";
@@ -26,6 +67,20 @@ function pad24(t: string): string {
   return `${String(parseInt(h)).padStart(2, "0")}:${mi.substring(0, 2)}`;
 }
 
+// Manchester times use "4.30" / "1.06" dot format without AM/PM
+function dotTo24(t: string, isPm: boolean): string {
+  const s = t.trim().replace(/\s+/g, "");
+  if (!s || s === "-") return "";
+  const parts = s.split(".");
+  if (parts.length < 2) return "";
+  let h = parseInt(parts[0]);
+  const mi = parseInt(parts[1]);
+  if (isNaN(h) || isNaN(mi)) return "";
+  if (isPm && h < 12) h += 12;
+  if (!isPm && h === 12) h = 0;
+  return `${String(h).padStart(2, "0")}:${String(mi).padStart(2, "0")}`;
+}
+
 function addMinutes(t: string, n: number): string {
   const [h, m] = t.split(":").map(Number);
   if (isNaN(h) || isNaN(m)) return t;
@@ -34,7 +89,7 @@ function addMinutes(t: string, n: number): string {
 }
 
 function cellText($: cheerio.CheerioAPI, el: cheerio.Element): string {
-  return $(el).text().replace(/\u200b/g, "").trim();
+  return $(el).text().replace(/​/g, "").trim();
 }
 
 async function fetchHtml(url: string, timeoutMs = 15000): Promise<string> {
@@ -58,6 +113,27 @@ function elmTo24(t: string, isPm: boolean): string {
   if (!isPm && h === 12) h24 = 0;
   return `${String(h24).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
 }
+
+function isToday(cell: string): boolean {
+  const now = new Date();
+  const d = now.getDate(), m = now.getMonth() + 1, y = now.getFullYear();
+  const text = cell.replace(/(\d+)(st|nd|rd|th)/gi, "$1").trim();
+  const MONTHS: Record<string, number> = {
+    january:1,february:2,march:3,april:4,may:5,june:6,
+    july:7,august:8,september:9,october:10,november:11,december:12,
+    jan:1,feb:2,mar:3,apr:4,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12
+  };
+  const t = text.match(/(\d{1,2})\s+([a-z]+)\s+(\d{4})/i);
+  if (t) {
+    const mo = MONTHS[t[2].toLowerCase()];
+    return !!mo && parseInt(t[1]) === d && mo === m && parseInt(t[3]) === y;
+  }
+  const s = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (s) return parseInt(s[1]) === d && parseInt(s[2]) === m && parseInt(s[3]) === y;
+  return false;
+}
+
+// ── Scrapers ───────────────────────────────────────────────────────────────
 
 async function scrapeEastLondon(): Promise<DailyTimes> {
   const html = await fetchHtml("https://www.eastlondonmosque.org.uk/prayer-times");
@@ -119,25 +195,6 @@ async function scrapeEdinburgh(): Promise<DailyTimes> {
   return result!;
 }
 
-function isToday(cell: string): boolean {
-  const now = new Date();
-  const d = now.getDate(), m = now.getMonth() + 1, y = now.getFullYear();
-  const text = cell.replace(/(\d+)(st|nd|rd|th)/gi, "$1").trim();
-  const MONTHS: Record<string, number> = {
-    january:1,february:2,march:3,april:4,may:5,june:6,
-    july:7,august:8,september:9,october:10,november:11,december:12,
-    jan:1,feb:2,mar:3,apr:4,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12
-  };
-  const t = text.match(/(\d{1,2})\s+([a-z]+)\s+(\d{4})/i);
-  if (t) {
-    const mo = MONTHS[t[2].toLowerCase()];
-    return !!mo && parseInt(t[1]) === d && mo === m && parseInt(t[3]) === y;
-  }
-  const s = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (s) return parseInt(s[1]) === d && parseInt(s[2]) === m && parseInt(s[3]) === y;
-  return false;
-}
-
 async function scrapeBirmingham(): Promise<DailyTimes> {
   // Try HTML pages directly — Cloudflare blocks wp-json for Railway's IPs
   const BROWSER_HEADERS = {
@@ -156,19 +213,13 @@ async function scrapeBirmingham(): Promise<DailyTimes> {
   function parseTodayRow(html: string, source: string): DailyTimes | null {
     const $ = cheerio.load(html);
     let result: DailyTimes | null = null;
-
     $("table tr").each((_, row) => {
       const cells = $(row).find("td");
       if (cells.length < 13) return;
-
-      // Prefer the website's own "today" CSS class — most reliable
       const rowClass = ($(row).attr("class") || "").toLowerCase();
       const todayByClass = rowClass.includes("today");
-      // Fallback: match by date text in first column
       const todayByDate = !todayByClass && isToday(cellText($, cells.get(0)!));
-
       if (!todayByClass && !todayByDate) return;
-
       result = {
         adhan: {
           Fajr: pad24(cellText($, cells.get(2)!)),
@@ -188,27 +239,17 @@ async function scrapeBirmingham(): Promise<DailyTimes> {
       };
       return false as any;
     });
-
     return result;
   }
 
   const errors: string[] = [];
-
   for (const url of URLS) {
     try {
-      const res = await fetch(url, {
-        headers: BROWSER_HEADERS,
-        signal: AbortSignal.timeout(15000),
-      });
-      if (!res.ok) {
-        errors.push(`${url} → HTTP ${res.status}`);
-        continue;
-      }
+      const res = await fetch(url, { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(15000) });
+      if (!res.ok) { errors.push(`${url} → HTTP ${res.status}`); continue; }
       const html = await res.text();
-      // Cloudflare challenge pages are small and contain no table data
       if (html.length < 5000 || !html.includes("<table")) {
-        errors.push(`${url} → no table found (possibly Cloudflare challenge)`);
-        continue;
+        errors.push(`${url} → no table found (possibly Cloudflare challenge)`); continue;
       }
       const result = parseTodayRow(html, url);
       if (result) return result;
@@ -217,7 +258,6 @@ async function scrapeBirmingham(): Promise<DailyTimes> {
       errors.push(`${url} → ${e instanceof Error ? e.message : String(e)}`);
     }
   }
-
   throw new Error(`Birmingham: all URLs failed — ${errors.join("; ")}`);
 }
 
@@ -238,11 +278,75 @@ async function scrapeGlasgow(): Promise<DailyTimes> {
   };
 }
 
+async function scrapeManchester(): Promise<DailyTimes> {
+  // The prayer times page fires an AJAX POST to admin-ajax.php on load.
+  // Times use dot-separated 12h format without AM/PM (e.g. "4.30", "1.06").
+  // Fajr columns are AM; all other prayer columns are PM.
+  // Column layout (0-based):
+  //   0=day  1=dayName  2=islamicDate
+  //   3=FajrAdhan  4=Sunrise  5=Zawal
+  //   6=ZuhrAdhan  7=AsrAdhan  8=Sunset(MaghribAdhan)  9=IshaAdhan
+  //   10=FajrJamaat  11=ZuhrJamaat  12=AsrJamaat  13=MaghribJamaat  14=IshaJamaat
+  const MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  const now = new Date();
+  const month = MONTH_ABBR[now.getMonth()];
+  const today = now.getDate();
+
+  const res = await fetch("https://manchestercentralmosque.org/wp-admin/admin-ajax.php", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+      "Referer": "https://manchestercentralmosque.org/prayer-times/",
+      "Origin": "https://manchestercentralmosque.org",
+    },
+    body: `action=get_monthly_timetable&month=${month}`,
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!res.ok) throw new Error(`Manchester admin-ajax HTTP ${res.status}`);
+  const html = await res.text();
+
+  const $ = cheerio.load(html);
+  let result: DailyTimes | null = null;
+
+  $("table tr").each((_, row) => {
+    const cells = $(row).find("td");
+    if (cells.length < 15) return;
+    const dayText = cellText($, cells.get(0)!).trim();
+    if (parseInt(dayText) !== today) return;
+    const c = (i: number) => cellText($, cells.get(i)!);
+    result = {
+      adhan: {
+        Fajr: dotTo24(c(3), false),
+        Dhuhr: dotTo24(c(6), true),
+        Asr: dotTo24(c(7), true),
+        Maghrib: dotTo24(c(8), true),
+        Isha: dotTo24(c(9), true),
+      },
+      jamaat: {
+        Fajr: dotTo24(c(10), false),
+        Dhuhr: dotTo24(c(11), true),
+        Asr: dotTo24(c(12), true),
+        Maghrib: dotTo24(c(13), true),
+        Isha: dotTo24(c(14), true),
+      },
+      source: "https://manchestercentralmosque.org/prayer-times/",
+    };
+    return false as any;
+  });
+
+  if (!result) throw new Error(`Manchester: row for day ${today} not found`);
+  return result!;
+}
+
+// ── Router ─────────────────────────────────────────────────────────────────
+
 const SCRAPERS: Record<string, () => Promise<DailyTimes>> = {
   "glasgow-central": scrapeGlasgow,
   "east-london": scrapeEastLondon,
   "edinburgh-central": scrapeEdinburgh,
   "birmingham-central": scrapeBirmingham,
+  "manchester-central": scrapeManchester,
 };
 
 router.get("/mosque-timetable/:mosqueId", async (req, res) => {
@@ -252,7 +356,7 @@ router.get("/mosque-timetable/:mosqueId", async (req, res) => {
     return res.status(404).json({ error: "No timetable available for this mosque" });
   }
   try {
-    const times = await scraper();
+    const times = await withCache(mosqueId, scraper);
     res.setHeader("Cache-Control", "public, max-age=3600");
     res.json(times);
   } catch (err: any) {
