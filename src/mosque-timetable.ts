@@ -214,6 +214,7 @@ async function scrapeGlasgow(): Promise<DailyTimes> {
 
 async function scrapeManchester(): Promise<DailyTimes> {
   // The prayer times page fires an AJAX POST to admin-ajax.php on load.
+  // Plugin: prayer-import. Action: mcm_get_month_file, param: current_file="Sep 2026".
   // Times use dot-separated 12h format without AM/PM (e.g. "4.30", "1.06").
   // Fajr columns are AM; all other prayer columns are PM.
   // Column layout (0-based):
@@ -224,7 +225,9 @@ async function scrapeManchester(): Promise<DailyTimes> {
   const MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   const now = new Date();
   const month = MONTH_ABBR[now.getMonth()];
+  const year = now.getFullYear();
   const today = now.getDate();
+  const currentFile = `${month} ${year}`; // e.g. "Sep 2026"
 
   const res = await fetch("https://manchestercentralmosque.org/wp-admin/admin-ajax.php", {
     method: "POST",
@@ -234,7 +237,7 @@ async function scrapeManchester(): Promise<DailyTimes> {
       "Referer": "https://manchestercentralmosque.org/prayer-times/",
       "Origin": "https://manchestercentralmosque.org",
     },
-    body: `action=get_monthly_timetable&month=${month}`,
+    body: `action=mcm_get_month_file&current_file=${encodeURIComponent(currentFile)}`,
     signal: AbortSignal.timeout(15000),
   });
   if (!res.ok) throw new Error(`Manchester admin-ajax HTTP ${res.status}`);
