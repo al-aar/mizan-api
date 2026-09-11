@@ -92,10 +92,10 @@ function cellText($: cheerio.CheerioAPI, el: cheerio.Element): string {
   return $(el).text().replace(/​/g, "").trim();
 }
 
-async function fetchHtml(url: string, timeoutMs = 15000): Promise<string> {
+async function fetchHtml(url: string, timeoutMs = 15000, ua = "Mozilla/5.0 (compatible; PrayerTimesBot/1.0)"): Promise<string> {
   const r = await fetch(url, {
     headers: {
-      "User-Agent": "Mozilla/5.0 (compatible; PrayerTimesBot/1.0)",
+      "User-Agent": ua,
       Accept: "text/html",
     },
     signal: AbortSignal.timeout(timeoutMs),
@@ -104,58 +104,58 @@ async function fetchHtml(url: string, timeoutMs = 15000): Promise<string> {
   return r.text();
 }
 
-function elmTo24(t: string, isPm: boolean): string {
-  const s = t.trim();
-  const [h, m] = s.split(":").map(Number);
-  if (isNaN(h) || isNaN(m)) return "";
-  let h24 = h;
-  if (isPm && h < 12) h24 = h + 12;
-  if (!isPm && h === 12) h24 = 0;
-  return `${String(h24).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
+// Extract HH:MM from an ISO timestamp: "2026-09-11T05:14:00+01:00" → "05:14"
+function isoToHHMM(iso: string | undefined): string {
+  if (!iso) return "";
+  const match = iso.match(/T(\d{2}:\d{2})/);
+  return match ? match[1] : "";
 }
 
-function isToday(cell: string): boolean {
-  const now = new Date();
-  const d = now.getDate(), m = now.getMonth() + 1, y = now.getFullYear();
-  const text = cell.replace(/(\d+)(st|nd|rd|th)/gi, "$1").trim();
-  const MONTHS: Record<string, number> = {
-    january:1,february:2,march:3,april:4,may:5,june:6,
-    july:7,august:8,september:9,october:10,november:11,december:12,
-    jan:1,feb:2,mar:3,apr:4,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12
+// ── MasjidBox scraper (shared for all MasjidBox mosques) ──────────────────
+// MasjidBox embeds all prayer + iqamah times server-side in window.REDUX_STATE,
+// so a plain HTML fetch is enough — no browser or API key required.
+
+async function scrapeMasjidBox(slug: string, source: string): Promise<DailyTimes> {
+  const html = await fetchHtml(
+    `https://masjidbox.com/prayer-times/${slug}`,
+    15000,
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+  );
+
+  // The value mixes standard %XX and non-standard %uXXXX Unicode escapes
+  const match = html.match(/window\.REDUX_STATE\s*=\s*'([\s\S]+?)'\s*;/);
+  if (!match) throw new Error(`MasjidBox ${slug}: REDUX_STATE not found in page`);
+
+  const decoded = match[1]
+    .replace(/%u([0-9A-Fa-f]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+  const json = decodeURIComponent(decoded);
+  const state = JSON.parse(json);
+  const timetable: any[] = state.masjidbox.masjidboxAthany.timetable;
+
+  const today = todayKey();
+  const entry = timetable.find((t: any) => t.date.startsWith(today));
+  if (!entry) throw new Error(`MasjidBox ${slug}: no timetable entry for ${today}`);
+
+  return {
+    adhan: {
+      Fajr: isoToHHMM(entry.fajr),
+      Dhuhr: isoToHHMM(entry.dhuhr),
+      Asr: isoToHHMM(entry.asr),
+      Maghrib: isoToHHMM(entry.maghrib),
+      Isha: isoToHHMM(entry.isha),
+    },
+    jamaat: {
+      Fajr: isoToHHMM(entry.iqamah?.fajr),
+      Dhuhr: isoToHHMM(entry.iqamah?.dhuhr),
+      Asr: isoToHHMM(entry.iqamah?.asr),
+      Maghrib: isoToHHMM(entry.iqamah?.maghrib),
+      Isha: isoToHHMM(entry.iqamah?.isha),
+    },
+    source,
   };
-  const t = text.match(/(\d{1,2})\s+([a-z]+)\s+(\d{4})/i);
-  if (t) {
-    const mo = MONTHS[t[2].toLowerCase()];
-    return !!mo && parseInt(t[1]) === d && mo === m && parseInt(t[3]) === y;
-  }
-  const s = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (s) return parseInt(s[1]) === d && parseInt(s[2]) === m && parseInt(s[3]) === y;
-  return false;
 }
 
-// ── Scrapers ───────────────────────────────────────────────────────────────
-
-async function scrapeEastLondon(): Promise<DailyTimes> {
-  const html = await fetchHtml("https://www.eastlondonmosque.org.uk/prayer-times");
-  const $ = cheerio.load(html);
-  const now = new Date();
-  const dateStr = `${String(now.getDate()).padStart(2, "0")}/${String(now.getMonth() + 1).padStart(2, "0")}/${now.getFullYear()}`;
-  let result: DailyTimes | null = null;
-  $("table tr").each((_, row) => {
-    const cells = $(row).find("td");
-    if (cells.length < 15) return;
-    if (cellText($, cells.get(0)!) !== dateStr) return;
-    const c = (i: number) => cellText($, cells.get(i)!);
-    result = {
-      adhan: { Fajr: elmTo24(c(5), false), Dhuhr: elmTo24(c(7), true), Asr: elmTo24(c(9), true), Maghrib: elmTo24(c(12), true), Isha: elmTo24(c(14), true) },
-      jamaat: { Fajr: elmTo24(c(6), false), Dhuhr: elmTo24(c(8), true), Asr: elmTo24(c(11), true), Maghrib: elmTo24(c(13), true), Isha: elmTo24(c(15), true) },
-      source: "https://www.eastlondonmosque.org.uk/prayer-times",
-    };
-    return false as any;
-  });
-  if (!result) throw new Error(`East London: no row for ${dateStr}`);
-  return result!;
-}
+// ── Individual scrapers ────────────────────────────────────────────────────
 
 async function scrapeEdinburgh(): Promise<DailyTimes> {
   const html = await fetchHtml("https://edmosque.org/about-the-mosque/prayer-times/");
@@ -193,72 +193,6 @@ async function scrapeEdinburgh(): Promise<DailyTimes> {
   });
   if (!result) throw new Error("Edinburgh: today's row not found");
   return result!;
-}
-
-async function scrapeBirmingham(): Promise<DailyTimes> {
-  // Try HTML pages directly — Cloudflare blocks wp-json for Railway's IPs
-  const BROWSER_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-GB,en;q=0.9",
-    "Referer": "https://centralmosque.org.uk/",
-  };
-
-  const URLS = [
-    "https://centralmosque.org.uk/mobile-timetable/",
-    "https://centralmosque.org.uk/timetable/",
-    "https://centralmosque.org.uk/prayer-times/",
-  ];
-
-  function parseTodayRow(html: string, source: string): DailyTimes | null {
-    const $ = cheerio.load(html);
-    let result: DailyTimes | null = null;
-    $("table tr").each((_, row) => {
-      const cells = $(row).find("td");
-      if (cells.length < 13) return;
-      const rowClass = ($(row).attr("class") || "").toLowerCase();
-      const todayByClass = rowClass.includes("today");
-      const todayByDate = !todayByClass && isToday(cellText($, cells.get(0)!));
-      if (!todayByClass && !todayByDate) return;
-      result = {
-        adhan: {
-          Fajr: pad24(cellText($, cells.get(2)!)),
-          Dhuhr: pad24(cellText($, cells.get(6)!)),
-          Asr: pad24(cellText($, cells.get(8)!)),
-          Maghrib: pad24(cellText($, cells.get(10)!)),
-          Isha: pad24(cellText($, cells.get(12)!)),
-        },
-        jamaat: {
-          Fajr: pad24(cellText($, cells.get(3)!)),
-          Dhuhr: pad24(cellText($, cells.get(7)!)),
-          Asr: pad24(cellText($, cells.get(9)!)),
-          Maghrib: pad24(cellText($, cells.get(11)!)),
-          Isha: pad24(cellText($, cells.get(13)!)),
-        },
-        source,
-      };
-      return false as any;
-    });
-    return result;
-  }
-
-  const errors: string[] = [];
-  for (const url of URLS) {
-    try {
-      const res = await fetch(url, { headers: BROWSER_HEADERS, signal: AbortSignal.timeout(15000) });
-      if (!res.ok) { errors.push(`${url} → HTTP ${res.status}`); continue; }
-      const html = await res.text();
-      if (html.length < 5000 || !html.includes("<table")) {
-        errors.push(`${url} → no table found (possibly Cloudflare challenge)`); continue;
-      }
-      const result = parseTodayRow(html, url);
-      if (result) return result;
-      errors.push(`${url} → today's row not found in table`);
-    } catch (e: unknown) {
-      errors.push(`${url} → ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-  throw new Error(`Birmingham: all URLs failed — ${errors.join("; ")}`);
 }
 
 async function scrapeGlasgow(): Promise<DailyTimes> {
@@ -342,10 +276,10 @@ async function scrapeManchester(): Promise<DailyTimes> {
 // ── Router ─────────────────────────────────────────────────────────────────
 
 const SCRAPERS: Record<string, () => Promise<DailyTimes>> = {
-  "glasgow-central": scrapeGlasgow,
-  "east-london": scrapeEastLondon,
-  "edinburgh-central": scrapeEdinburgh,
-  "birmingham-central": scrapeBirmingham,
+  "glasgow-central":    scrapeGlasgow,
+  "edinburgh-central":  scrapeEdinburgh,
+  "east-london":        () => scrapeMasjidBox("eastlondonmosque",       "https://masjidbox.com/prayer-times/eastlondonmosque"),
+  "birmingham-central": () => scrapeMasjidBox("centralmosque",           "https://masjidbox.com/prayer-times/centralmosque"),
   "manchester-central": scrapeManchester,
 };
 
