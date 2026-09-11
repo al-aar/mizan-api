@@ -139,30 +139,86 @@ function isToday(cell: string): boolean {
 }
 
 async function scrapeBirmingham(): Promise<DailyTimes> {
-  const res = await fetch("https://centralmosque.org.uk/wp-json/wp/v2/pages/325", {
-    headers: {
-      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
-    },
-    signal: AbortSignal.timeout(15000),
-  });
-  if (!res.ok) throw new Error(`Birmingham wp-json HTTP ${res.status}`);
-  const json = await res.json() as { content: { rendered: string } };
-  const $ = cheerio.load(json.content.rendered);
-  let result: DailyTimes | null = null;
-  $("table tr").each((_, row) => {
-    const cells = $(row).find("td");
-    if (cells.length < 13) return;
-    const dateCell = cellText($, cells.get(0)!).toLowerCase();
-    if (!isToday(dateCell)) return;
-    result = {
-      adhan: { Fajr: pad24(cellText($, cells.get(2)!)), Dhuhr: pad24(cellText($, cells.get(6)!)), Asr: pad24(cellText($, cells.get(8)!)), Maghrib: pad24(cellText($, cells.get(10)!)), Isha: pad24(cellText($, cells.get(12)!)) },
-      jamaat: { Fajr: pad24(cellText($, cells.get(3)!)), Dhuhr: pad24(cellText($, cells.get(7)!)), Asr: pad24(cellText($, cells.get(9)!)), Maghrib: pad24(cellText($, cells.get(11)!)), Isha: pad24(cellText($, cells.get(13)!)) },
-      source: "https://centralmosque.org.uk/timetable",
-    };
-    return false as any;
-  });
-  if (!result) throw new Error("Birmingham: today's row not found");
-  return result!;
+  // Try HTML pages directly — Cloudflare blocks wp-json for Railway's IPs
+  const BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-GB,en;q=0.9",
+    "Referer": "https://centralmosque.org.uk/",
+  };
+
+  const URLS = [
+    "https://centralmosque.org.uk/mobile-timetable/",
+    "https://centralmosque.org.uk/timetable/",
+    "https://centralmosque.org.uk/prayer-times/",
+  ];
+
+  function parseTodayRow(html: string, source: string): DailyTimes | null {
+    const $ = cheerio.load(html);
+    let result: DailyTimes | null = null;
+
+    $("table tr").each((_, row) => {
+      const cells = $(row).find("td");
+      if (cells.length < 13) return;
+
+      // Prefer the website's own "today" CSS class — most reliable
+      const rowClass = ($(row).attr("class") || "").toLowerCase();
+      const todayByClass = rowClass.includes("today");
+      // Fallback: match by date text in first column
+      const todayByDate = !todayByClass && isToday(cellText($, cells.get(0)!));
+
+      if (!todayByClass && !todayByDate) return;
+
+      result = {
+        adhan: {
+          Fajr: pad24(cellText($, cells.get(2)!)),
+          Dhuhr: pad24(cellText($, cells.get(6)!)),
+          Asr: pad24(cellText($, cells.get(8)!)),
+          Maghrib: pad24(cellText($, cells.get(10)!)),
+          Isha: pad24(cellText($, cells.get(12)!)),
+        },
+        jamaat: {
+          Fajr: pad24(cellText($, cells.get(3)!)),
+          Dhuhr: pad24(cellText($, cells.get(7)!)),
+          Asr: pad24(cellText($, cells.get(9)!)),
+          Maghrib: pad24(cellText($, cells.get(11)!)),
+          Isha: pad24(cellText($, cells.get(13)!)),
+        },
+        source,
+      };
+      return false as any;
+    });
+
+    return result;
+  }
+
+  const errors: string[] = [];
+
+  for (const url of URLS) {
+    try {
+      const res = await fetch(url, {
+        headers: BROWSER_HEADERS,
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!res.ok) {
+        errors.push(`${url} → HTTP ${res.status}`);
+        continue;
+      }
+      const html = await res.text();
+      // Cloudflare challenge pages are small and contain no table data
+      if (html.length < 5000 || !html.includes("<table")) {
+        errors.push(`${url} → no table found (possibly Cloudflare challenge)`);
+        continue;
+      }
+      const result = parseTodayRow(html, url);
+      if (result) return result;
+      errors.push(`${url} → today's row not found in table`);
+    } catch (e: unknown) {
+      errors.push(`${url} → ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  throw new Error(`Birmingham: all URLs failed — ${errors.join("; ")}`);
 }
 
 async function scrapeGlasgow(): Promise<DailyTimes> {
