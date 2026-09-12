@@ -206,7 +206,7 @@ async function scrapeGlasgow(): Promise<DailyTimes> {
   if (!res.ok) throw new Error(`Maktab API HTTP ${res.status}`);
   const t = await res.json();
   return {
-    adhan: { Fajr: t.fajrBegins, Dhuhr: t.zuhrBegins, Asr: t.asrMithl1, Maghrib: t.maghribBegins, Isha: t.ishaBegins },
+    adhan: { Fajr: t.fajrBegins, Dhuhr: t.zuhrBegins, AsrMithl1: t.asrMithl1, AsrMithl2: t.asrMithl2, Maghrib: t.maghribBegins, Isha: t.ishaBegins },
     jamaat: { Fajr: t.fajrJamah, Dhuhr: t.zuhrJamah, Asr: t.asrJamah, Maghrib: t.maghribJamah, Isha: t.ishaJamah },
     source: "https://nmic.co.uk/",
   };
