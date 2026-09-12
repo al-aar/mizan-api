@@ -33,7 +33,7 @@ function todayKey(): string {
 
 // ── Core worker ─────────────────────────────────────────────────────────────
 async function fetchAndStore(mosqueId: string, date: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/mosque-timetable/${mosqueId}`, {
+  const res = await fetch(`${API_BASE}/api/mosque-timetable/${mosqueId}`, {
     signal: AbortSignal.timeout(20_000),
   });
 
