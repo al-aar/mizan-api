@@ -1,5 +1,17 @@
 import { Router } from "express";
 import * as cheerio from "cheerio";
+import { createClient } from "@supabase/supabase-js";
+
+let _supabase: ReturnType<typeof createClient> | null = null;
+function getSupabase() {
+  if (!_supabase) {
+    const url = process.env.SUPABASE_URL;
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!url || !key) throw new Error("Missing Supabase env vars");
+    _supabase = createClient(url, key);
+  }
+  return _supabase;
+}
 
 const router = Router();
 
@@ -299,6 +311,26 @@ router.get("/mosque-timetable/:mosqueId", async (req, res) => {
   } catch (err: any) {
     console.error(`[mosque-timetable] ${mosqueId}:`, err.message);
     res.status(502).json({ error: `Failed to fetch timetable: ${err.message}` });
+  }
+});
+
+// ── List mosques by city ───────────────────────────────────────────────────
+router.get("/mosques", async (req, res) => {
+  const city = (req.query.city as string | undefined)?.trim();
+  if (!city) return res.status(400).json({ error: "city query param is required" });
+  try {
+    const sb = getSupabase();
+    const { data, error } = await sb
+      .from("mosques")
+      .select("id, name, city, has_online_presence, ingestion_type")
+      .ilike("city", city)
+      .order("name");
+    if (error) throw error;
+    res.setHeader("Cache-Control", "public, max-age=3600");
+    res.json(data ?? []);
+  } catch (err: any) {
+    console.error("[/api/mosques]", err.message);
+    res.status(500).json({ error: "Failed to fetch mosques" });
   }
 });
 
