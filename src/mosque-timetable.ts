@@ -298,8 +298,63 @@ const SCRAPERS: Record<string, () => Promise<DailyTimes>> = {
   "manchester-central": scrapeManchester,
 };
 
+// ── Fetch today's times from prayer_times table ────────────────────────────
+async function fromDatabase(mosqueId: string): Promise<DailyTimes | null> {
+  try {
+    const sb = getSupabase();
+    const today = todayKey();
+    const { data, error } = await sb
+      .from("prayer_times")
+      .select("*")
+      .eq("mosque_id", mosqueId)
+      .eq("date", today)
+      .single();
+    if (error || !data) return null;
+
+    const t = (v: string | null) => v ? v.substring(0, 5) : ""; // "HH:MM:SS" → "HH:MM"
+
+    return {
+      adhan: {
+        Fajr:      t(data.fajr_start),
+        Dhuhr:     t(data.zuhr_start),
+        AsrMithl1: t(data.asr_mithl1),
+        AsrMithl2: t(data.asr_mithl2),
+        Asr:       t(data.asr_mithl1 || data.asr_start), // fallback
+        Maghrib:   t(data.maghrib_start),
+        Isha:      t(data.isha_start),
+      },
+      jamaat: {
+        Fajr:    t(data.fajr_jamaat),
+        Dhuhr:   t(data.zuhr_jamaat),
+        Asr:     t(data.asr_jamaat),
+        Maghrib: t(data.maghrib_jamaat),
+        Isha:    t(data.isha_jamaat),
+      },
+      source: "database",
+    };
+  } catch {
+    return null;
+  }
+}
+
+// ── Is this a UUID (DB mosque) or a slug (hardcoded scraper)? ──────────────
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 router.get("/mosque-timetable/:mosqueId", async (req, res) => {
   const { mosqueId } = req.params;
+
+  // UUID-based mosque → try prayer_times table first
+  if (UUID_RE.test(mosqueId)) {
+    const dbTimes = await fromDatabase(mosqueId);
+    if (dbTimes) {
+      res.setHeader("Cache-Control", "public, max-age=1800");
+      return res.json(dbTimes);
+    }
+    // No data in DB yet for today
+    return res.status(404).json({ error: "No timetable available for this mosque today" });
+  }
+
+  // Slug-based mosque → use hardcoded scraper
   const scraper = SCRAPERS[mosqueId];
   if (!scraper) {
     return res.status(404).json({ error: "No timetable available for this mosque" });
