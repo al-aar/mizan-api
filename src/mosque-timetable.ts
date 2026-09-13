@@ -212,7 +212,7 @@ async function scrapeGlasgow(): Promise<DailyTimes> {
   const dd = String(now.getDate()).padStart(2, "0");
   const mm = String(now.getMonth() + 1).padStart(2, "0");
   const res = await fetch(
-    `https://maktabonline.co.uk/api/prayers/timings/6064ea57133de011c43f930f?day=${dd}/${mm}`,
+    `https://maktabonline.co.uk/api/prayers/timings/5f21a98335596f0f6464b0c3?day=${dd}/${mm}`,
     { signal: AbortSignal.timeout(10000) }
   );
   if (!res.ok) throw new Error(`Maktab API HTTP ${res.status}`);
