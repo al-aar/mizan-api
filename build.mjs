@@ -15,4 +15,15 @@ await build({
   logLevel: "info",
 });
 
+await build({
+  entryPoints: ["src/daily-prayer-refresh.ts"],
+  platform: "node",
+  bundle: true,
+  format: "cjs",
+  outfile: "dist/daily-prayer-refresh.cjs",
+  minify: false,
+  external: ["cheerio"],
+  logLevel: "info",
+});
+
 console.log("Build complete!");
