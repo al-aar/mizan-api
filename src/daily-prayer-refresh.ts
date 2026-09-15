@@ -12,8 +12,12 @@
  */
 
 import { createClient } from "@supabase/supabase-js";
-import * as dotenv from "dotenv";
-dotenv.config();
+
+// dotenv only needed locally — Railway injects env vars directly
+try {
+  const { default: dotenv } = await import("dotenv");
+  dotenv.config();
+} catch { /* not available in production — that's fine */ }
 
 const supabase = createClient(
   process.env.SUPABASE_URL!,

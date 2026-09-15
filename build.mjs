@@ -23,6 +23,7 @@ await build({
   outfile: "dist/daily-prayer-refresh.mjs",
   minify: false,
   external: ["cheerio", "dotenv"],
+  // dotenv is optional (try/catch in source) — keep external so missing pkg doesn't error
   logLevel: "info",
 });
 
