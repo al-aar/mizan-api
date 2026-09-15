@@ -19,10 +19,10 @@ await build({
   entryPoints: ["src/daily-prayer-refresh.ts"],
   platform: "node",
   bundle: true,
-  format: "cjs",
-  outfile: "dist/daily-prayer-refresh.cjs",
+  format: "esm",
+  outfile: "dist/daily-prayer-refresh.mjs",
   minify: false,
-  external: ["cheerio"],
+  external: ["cheerio", "dotenv"],
   logLevel: "info",
 });
 
