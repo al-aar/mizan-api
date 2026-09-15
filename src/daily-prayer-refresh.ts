@@ -136,7 +136,7 @@ async function findSupabaseId(name: string, postcode?: string): Promise<string |
 }
 
 async function runScotland(): Promise<{ ok: number; skip: number; err: number }> {
-  console.log("\n━━━ Phase 1: Scotland (Maktabonline) ━━━");
+  console.log("\n━━━ Phase 1: Maktabonline (Scotland) ━━━");
   const day = todayDDMM();
   const masjids: any[] = [];
 
@@ -289,7 +289,7 @@ const ENGLAND_MOSQUES: Array<{ name: string; id: string; scraper: () => Promise<
 ];
 
 async function runEngland(): Promise<{ ok: number; err: number }> {
-  console.log("\n━━━ Phase 2: England key mosques ━━━");
+  console.log("\n━━━ Phase 2: Custom scrapers (Edinburgh, East London, Birmingham, Manchester) ━━━");
   let ok = 0, err = 0;
   for (const { name, id, scraper } of ENGLAND_MOSQUES) {
     process.stdout.write(`  ${name.padEnd(40)} `);
