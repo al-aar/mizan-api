@@ -369,20 +369,74 @@ router.get("/mosque-timetable/:mosqueId", async (req, res) => {
   }
 });
 
-// ── List mosques by city ───────────────────────────────────────────────────
+// ── Haversine distance in metres ──────────────────────────────────────────
+function distanceM(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2)**2 +
+            Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+// ── List mosques by city OR by lat/lng radius ─────────────────────────────
 router.get("/mosques", async (req, res) => {
-  const city = (req.query.city as string | undefined)?.trim();
-  if (!city) return res.status(400).json({ error: "city query param is required" });
+  const city    = (req.query.city   as string | undefined)?.trim();
+  const latStr  = req.query.lat     as string | undefined;
+  const lngStr  = req.query.lng     as string | undefined;
+  const radiusStr = req.query.radius as string | undefined; // miles
+
+  const useRadius = latStr && lngStr;
+
+  if (!city && !useRadius) {
+    return res.status(400).json({ error: "Provide either 'city' or 'lat'+'lng' query params" });
+  }
+
   try {
     const sb = getSupabase();
+
+    if (useRadius) {
+      const lat    = parseFloat(latStr!);
+      const lng    = parseFloat(lngStr!);
+      const miles  = parseFloat(radiusStr ?? "5");   // default 5 miles
+      const metres = miles * 1609.344;
+
+      // Bounding box (1 degree lat ≈ 111 km; 1 degree lng ≈ 111*cos(lat) km)
+      const latDelta = metres / 111_000;
+      const lngDelta = metres / (111_000 * Math.cos(lat * Math.PI / 180));
+
+      const { data, error } = await sb
+        .from("mosques")
+        .select("id, name, city, postcode, latitude, longitude, has_online_presence, ingestion_type")
+        .gte("latitude",  lat - latDelta)
+        .lte("latitude",  lat + latDelta)
+        .gte("longitude", lng - lngDelta)
+        .lte("longitude", lng + lngDelta)
+        .not("latitude",  "is", null)
+        .not("longitude", "is", null);
+
+      if (error) throw error;
+
+      // Exact Haversine filter + add distance_miles
+      const filtered = (data ?? [])
+        .map(m => ({ ...m, distance_miles: distanceM(lat, lng, m.latitude, m.longitude) / 1609.344 }))
+        .filter(m => m.distance_miles <= miles)
+        .sort((a, b) => a.distance_miles - b.distance_miles);
+
+      res.setHeader("Cache-Control", "public, max-age=300"); // 5 min cache for location queries
+      return res.json(filtered);
+    }
+
+    // City filter (original behaviour)
     const { data, error } = await sb
       .from("mosques")
-      .select("id, name, city, has_online_presence, ingestion_type")
-      .ilike("city", city)
+      .select("id, name, city, postcode, latitude, longitude, has_online_presence, ingestion_type")
+      .ilike("city", city!)
       .order("name");
     if (error) throw error;
     res.setHeader("Cache-Control", "public, max-age=3600");
     res.json(data ?? []);
+
   } catch (err: any) {
     console.error("[/api/mosques]", err.message);
     res.status(500).json({ error: "Failed to fetch mosques" });
