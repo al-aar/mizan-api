@@ -413,7 +413,9 @@ router.get("/mosques", async (req, res) => {
         .gte("longitude", lng - lngDelta)
         .lte("longitude", lng + lngDelta)
         .not("latitude",  "is", null)
-        .not("longitude", "is", null);
+        .not("longitude", "is", null)
+        .not("name", "ilike", "%unnamed%")
+        .neq("status", "needs_review");
 
       if (error) throw error;
 
@@ -432,6 +434,8 @@ router.get("/mosques", async (req, res) => {
       .from("mosques")
       .select("id, name, city, postcode, latitude, longitude, has_online_presence, ingestion_type")
       .ilike("city", city!)
+      .not("name", "ilike", "%unnamed%")
+      .neq("status", "needs_review")
       .order("name");
     if (error) throw error;
     res.setHeader("Cache-Control", "public, max-age=3600");
